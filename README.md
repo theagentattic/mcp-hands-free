@@ -1,338 +1,369 @@
-# Claude Voice - Voice Interface for Claude Code CLI
+# Claude Hands-Free - Voice Input MCP Server
 
-Voice-enabled interface for Claude Code using Whisper STT and Piper TTS.
+Hands-free voice input for Claude Code CLI using Whisper speech-to-text.
 
 ## Architecture
 
 ```
-MacBook M1 (Client)
-  ↓ Push-to-talk (sox)
-  ↓ HTTP POST /voice
-Proxmox LXC (Server)
-  ├─ Whisper STT → text
-  ├─ Claude Code CLI → response
-  └─ Piper TTS → audio
-  ↓ HTTP Response
-MacBook M1 (Client)
-  └─ afplay (audio playback)
+Claude Code CLI
+  ↓ calls get_voice_input() MCP tool
+MCP Server (stdio)
+  ↓ HTTP POST /api/request-voice
+FastAPI Server (coordination)
+  ↓ stores request_id
+Browser Interface
+  ↓ polls /api/pending-requests
+  ↓ auto-starts recording
+  ↓ user speaks
+  ↓ POST audio to /api/submit-voice/{request_id}
+FastAPI Server
+  ↓ transcribes with Whisper via Wyoming protocol
+MCP Server
+  ↓ polls /api/result/{request_id}
+  ↓ returns transcript
+Claude Code CLI
+  └─ receives transcript as user input
 ```
 
 ## Features
 
-✅ **Conversation Continuity** - Maintains context across interactions
-✅ **Push-to-Talk** - Record with Ctrl+C to send
-✅ **Session Management** - Resume conversations anytime
-✅ **Fast STT** - Faster-Whisper (base model)
-✅ **Natural TTS** - Piper neural voices
+- **Hands-Free Input** - Speak your requests instead of typing
+- **Multi-Language Support** - French, English, Spanish, German, Italian
+- **Browser-Based Recording** - No client software installation needed
+- **Whisper STT** - High-quality speech recognition via Wyoming protocol
+- **MCP Integration** - Seamless integration with Claude Code CLI
+- **Auto-Recording** - Browser automatically starts recording when Claude requests voice input
 
 ## Prerequisites
 
-### Server (Proxmox LXC)
-- Docker & Docker Compose
-- Claude Code CLI installed
-- Whisper service (port 10300)
-- Piper service (port 10200)
-
-### Client (MacBook)
-- sox (audio recording)
-- curl (HTTP client)
-- afplay (native macOS, pre-installed)
+- **FastAPI Server** - Coordination server with Whisper integration
+- **Whisper Service** - Wyoming-compatible Whisper STT service (port 10300)
+- **Browser** - Any modern browser with microphone access
+- **Claude Code CLI** - With MCP server support
 
 ## Installation
 
-### 1. Server Setup
+### 1. Install MCP Server
+
+Add to your `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "claude-voice": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "/path/to/claude-voice/mcp-server",
+        "claude-voice-mcp"
+      ],
+      "env": {
+        "VOICE_SERVER_URL": "https://your-server:8766"
+      }
+    }
+  }
+}
+```
+
+### 2. Start FastAPI Server
 
 ```bash
-cd /workspace/proxmox-services/claude-voice
+cd /path/to/claude-voice
 
 # Install Python dependencies
 pip3 install -r requirements.txt
 
-# Start the voice server
+# Start the server (with SSL for browser microphone access)
 python3 server.py
 ```
 
-Server runs on port 8765.
+Server runs on port 8766 (HTTPS).
 
-### 2. Start Whisper Service
-
-```bash
-cd /workspace/proxmox-services/whisper
-cp .env.example .env
-docker-compose up -d
-```
-
-### 3. Verify Piper is Running
+### 3. Start Whisper Service
 
 ```bash
-cd /workspace/proxmox-services/piper
-docker-compose ps
-# Should show piper running on port 10200
+# Using Wyoming-compatible Whisper service
+docker run -d \
+  -p 10300:10300 \
+  rhasspy/wyoming-faster-whisper \
+  --model base \
+  --language fr
 ```
 
-### 4. MacBook Client Setup
+### 4. Open Browser Interface
 
-```bash
-# Install sox
-brew install sox
-
-# Download client script
-scp user@server:/workspace/proxmox-services/claude-voice/client-macos.sh ~/claude-voice.sh
-chmod +x ~/claude-voice.sh
-
-# Run client
-~/claude-voice.sh http://your-server:8765
+Navigate to:
 ```
+https://your-server:8766/static/voice-input.html
+```
+
+Accept SSL certificate warning (self-signed) and grant microphone permissions.
 
 ## Usage
 
-### Start Voice Chat
+### Basic Voice Input
 
-```bash
-# On MacBook
-./claude-voice.sh http://server-ip:8765
+In Claude Code CLI:
+```
+You: "Get my next request via voice"
 ```
 
-### Workflow
+Claude calls `get_voice_input()` tool, browser auto-starts recording, you speak, transcript is returned.
 
-1. **Press Enter** when ready to speak
-2. **Start talking** - recording begins
-3. **Press Ctrl+C** to stop and send
-4. **Wait** for Claude's response
-5. **Listen** to audio response
-6. **Repeat** - conversation context is maintained
-
-### Commands
-
-- Type `new` - Start fresh conversation
-- Type `quit` - Exit client
-- **Session persists** - Restart client to continue
-
-### Example Conversation
+### With Language Parameter
 
 ```
-You: "What files are in this directory?"
-Claude: "I see three Python files: server.py, voice-claude.py, and requirements.txt..."
-
-You: "What does server.py do?"
-Claude: "Based on our previous context, server.py is the FastAPI server that handles..."
+You: "Get my next request via voice in English"
 ```
 
-## How Conversations Work
+### Example Workflow
 
-### Session Management
+```
+You: Get my next request via voice
+[Browser automatically starts recording]
+You: [speaking] "List my vault secrets"
+Claude: Voice input received: "List my vault secrets"
+[Claude then uses vault MCP tool to list secrets]
+```
 
-1. **First request**: Server creates new session ID
-2. **Response**: Returns audio + session ID in header
-3. **Client saves**: Session ID stored in `~/.claude-voice-session`
-4. **Next request**: Client sends audio + session ID
-5. **Server maintains**: Conversation history per session
+## MCP Tool API
 
-### Claude Integration
+### get_voice_input
 
-The server maintains an **interactive Claude CLI process** per session:
+Request voice input from the user.
 
+**Parameters:**
+- `language` (optional): Language code (fr, en, es, de, it) - default: "fr"
+- `timeout` (optional): Maximum seconds to wait - default: 60
+
+**Returns:**
+- Success: `Voice input received: "transcript text"`
+- Timeout: `Voice input timed out. User did not provide input within the timeout period.`
+- Error: `Error getting voice input: error message`
+
+**Example:**
 ```python
-# Keeps claude chat running
-process = subprocess.Popen(["claude", "chat"], stdin=PIPE, stdout=PIPE)
+# French (default)
+get_voice_input()
 
-# Each voice message goes to the same process
-process.stdin.write(user_message + "\n")
-response = process.stdout.readline()
+# English
+get_voice_input(language="en")
+
+# With custom timeout
+get_voice_input(timeout=30)
 ```
-
-This ensures true conversation continuity!
 
 ## API Endpoints
 
-### POST /voice
-Upload audio, get response audio
+### POST /api/request-voice
+Create a new voice input request (called by MCP server).
 
 **Request:**
-```bash
-curl -X POST \
-  -F "audio=@recording.wav" \
-  -F "session_id=abc123" \
-  http://server:8765/voice
+```json
+{"language": "fr"}
 ```
 
 **Response:**
-- Body: WAV audio file
-- Header: `X-Session-ID: abc123`
-
-### POST /session/new
-Create new conversation
-
-```bash
-curl -X POST http://server:8765/session/new
-# Returns: {"session_id": "abc123"}
+```json
+{"request_id": "abc123", "status": "pending"}
 ```
 
-### POST /session/{id}/clear
-Clear conversation history
+### GET /api/pending-requests
+Get list of pending voice requests (polled by browser).
 
-```bash
-curl -X POST http://server:8765/session/abc123/clear
-# Returns: {"status": "cleared"}
+**Response:**
+```json
+{
+  "requests": [
+    {"id": "abc123", "language": "fr"}
+  ]
+}
 ```
 
-### GET /health
-Health check
+### POST /api/claim-request/{request_id}
+Claim a pending request to prevent duplicate processing.
 
-```bash
-curl http://server:8765/health
+**Response:**
+```json
+{"status": "recording"}
+```
+
+### POST /api/submit-voice/{request_id}
+Submit recorded audio for transcription.
+
+**Request:**
+- Multipart form with audio file (WAV format, 16kHz, mono)
+
+**Response:**
+```json
+{
+  "transcript": "user's spoken text",
+  "status": "completed"
+}
+```
+
+### GET /api/result/{request_id}
+Get transcription result (polled by MCP server).
+
+**Response:**
+```json
+{
+  "status": "completed",
+  "transcript": "user's spoken text",
+  "error": null
+}
 ```
 
 ## Configuration
 
-### Server (server.py)
+### Server Configuration
+
+Edit `server.py`:
 
 ```python
 WHISPER_HOST = "localhost"
 WHISPER_PORT = 10300
-PIPER_HOST = "localhost"
-PIPER_PORT = 10200
+PORT = 8766
 ```
 
 ### Whisper Model
 
-Edit `/workspace/proxmox-services/whisper/docker-compose.yml`:
+Change Whisper model for speed/accuracy tradeoff:
 
-```yaml
-command: >
-  --model base           # tiny, base, small, medium, large
-  --language en
-  --beam-size 5
+```bash
+# Faster, less accurate
+--model tiny
+
+# Balanced (default)
+--model base
+
+# Slower, more accurate
+--model medium
 ```
 
-### Piper Voice
+### SSL Certificates
 
-Edit `/workspace/proxmox-services/piper/docker-compose.yml`:
+Generate self-signed certificates:
 
-```yaml
-command: --voice en_US-lessac-medium  # Change voice
+```bash
+openssl req -x509 -newkey rsa:4096 \
+  -keyout key.pem -out cert.pem \
+  -days 365 -nodes \
+  -subj "/CN=localhost"
 ```
 
 ## Troubleshooting
 
-### No Response from Server
+### Browser Can't Access Microphone
 
+**Check HTTPS:** Browsers require HTTPS for microphone access
 ```bash
-# Check server is running
-curl http://server:8765/health
-
-# Check Whisper
-curl http://server:10300/
-
-# Check Piper
-curl http://server:10200/
+# Verify server is running with SSL
+curl -k https://localhost:8766/health
 ```
 
-### Recording Issues (macOS)
+**Check Permissions:** Grant microphone access in browser settings
 
+### MCP Server Not Loaded
+
+**Restart Claude Code CLI:**
 ```bash
-# Test microphone
-sox -d test.wav trim 0 3
-
-# If fails, check microphone permissions
-# System Settings → Privacy & Security → Microphone
+# Exit and restart claude command
 ```
 
-### Conversation Not Continuing
-
+**Check .mcp.json path:**
 ```bash
-# Check session file
-cat ~/.claude-voice-session
-
-# Clear and start fresh
-rm ~/.claude-voice-session
+# Verify path to mcp-server directory is correct
+ls /path/to/claude-voice/mcp-server/pyproject.toml
 ```
 
-### Claude CLI Not Found
+### Whisper Service Not Responding
 
+**Check Whisper is running:**
 ```bash
-# On server, verify Claude Code is installed
-which claude
-claude --version
-
-# Should show: Claude Code CLI v1.x.x
+curl http://localhost:10300/
 ```
 
-## Performance
+**Check Wyoming protocol:**
+```bash
+# Should show Wyoming service info
+curl http://localhost:10300/v1/services
+```
 
-### Latency Breakdown
+### Voice Input Times Out
 
-1. **Recording**: ~2-5 seconds (manual)
-2. **Upload**: ~0.5 seconds (16kHz mono WAV)
-3. **Whisper STT**: ~1-2 seconds (base model)
-4. **Claude Processing**: ~2-10 seconds (depends on query)
-5. **Piper TTS**: ~0.5-1 second
-6. **Download + Play**: ~0.5 seconds
+**Check browser is open:** Ensure voice-input.html is loaded
 
-**Total**: ~7-20 seconds per interaction
+**Check polling:** Open browser console, verify no errors
 
-### Optimization Tips
-
-- Use `tiny` Whisper model for faster STT (less accurate)
-- Keep messages short for faster TTS
-- Use local network (not internet) for low latency
+**Check network:** Ensure browser can reach FastAPI server
 
 ## Files
 
 ```
 claude-voice/
-├── server.py              # FastAPI server (main)
-├── client-macos.sh        # MacBook client script
-├── voice-claude.py        # Standalone Python script (alt)
-├── requirements.txt       # Python dependencies
-├── .env.example          # Configuration template
-├── .gitignore            # Git ignore patterns
-└── README.md             # This file
+├── mcp-server/                    # MCP server package
+│   ├── pyproject.toml
+│   └── src/claude_voice_mcp/
+│       ├── __init__.py            # Entry point
+│       ├── server.py              # Tool definition
+│       └── client.py              # HTTP client
+├── server.py                      # FastAPI coordination server
+├── static/
+│   └── voice-input.html           # Browser recording interface
+├── requirements.txt               # Python dependencies
+├── .gitignore
+└── README.md
 ```
 
 ## Security Notes
 
-- **No authentication** - Use firewall/VPN
-- **Conversation history** stored in `/tmp/claude-voice/sessions/`
-- **Audio files** deleted after processing
-- **Session IDs** are random UUIDs (8 chars)
+- **Self-Signed Certificates** - Browsers will warn, click "Accept"
+- **No Authentication** - Use firewall or VPN to restrict access
+- **In-Memory Storage** - Voice requests stored temporarily in memory
+- **Auto-Cleanup** - Audio files deleted after transcription
 
 ## Advanced Usage
 
-### Use with Different Claude Commands
+### Multiple Language Support
 
-Modify `server.py` to change Claude behavior:
+Switch languages dynamically:
 
 ```python
-# Research mode
-subprocess.Popen(["claude", "chat", "--research"])
+# Ask for French input
+get_voice_input(language="fr")
 
-# Specific model
-subprocess.Popen(["claude", "chat", "--model", "opus"])
+# Ask for English input
+get_voice_input(language="en")
 ```
 
-### Custom Wake Word (Future)
+### Custom Timeout
 
-Replace push-to-talk with wake word detection:
-1. Add `wyoming-openwakeword` service
-2. Stream audio continuously
-3. Trigger on "Hey Claude"
+Adjust timeout for longer voice inputs:
 
-### Multiple Users
+```python
+# Wait up to 2 minutes
+get_voice_input(timeout=120)
+```
 
-Add authentication header:
+### Integration with Other MCP Tools
 
-```bash
-curl -H "Authorization: Bearer user-token" ...
+Combine voice input with other MCP servers:
+
+```
+You: Get my next request via voice
+[speaks] "What's in my vault?"
+Claude: [uses claude-voice to get input, then vault tool to query]
 ```
 
 ## Resources
 
+- **Model Context Protocol**: https://github.com/anthropics/mcp
 - **Whisper**: https://github.com/openai/whisper
-- **Piper TTS**: https://github.com/rhasspy/piper
 - **Wyoming Protocol**: https://github.com/rhasspy/wyoming
 - **Claude Code CLI**: https://claude.com/claude-code
 
 ## License
 
-Personal use - part of CastleBlack homelab infrastructure.
+MIT License - Free for personal and commercial use.
