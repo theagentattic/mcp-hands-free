@@ -55,14 +55,14 @@ Issues = "https://github.com/theagentattic/mcp-hands-free/issues"
 Changelog = "https://github.com/theagentattic/mcp-hands-free/blob/main/CHANGELOG.md"
 
 [project.scripts]
-mcp-hands-free = "claude_voice_mcp:run"
+mcp-hands-free = "mcp_hands_free:run"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatchling.build.targets.wheel]
-packages = ["src/claude_voice_mcp"]
+packages = ["src/mcp_hands_free"]
 
 [tool.black]
 line-length = 100
