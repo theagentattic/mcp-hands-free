@@ -1,0 +1,66 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Data
+data/
+sessions/
+*.wav
+*.mp3
+
+# Certificates (regenerate in container)
+*.pem
+cert.pem
+key.pem
+
+# Temp
+tmp/
+.env
+.env.*
+
+# Tests
+tests/
+mcp-server/tests/
+pytest.ini
+
+# Development
+requirements-dev.txt
